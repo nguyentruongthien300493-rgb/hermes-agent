@@ -10,7 +10,7 @@ from duckduckgo_search import DDGS
 st.set_page_config(page_title="Hermes Agent - Advanced Cloud", page_icon="⚡", layout="centered")
 
 st.title("⚡ Hermes AI Agent - Advanced Cloud")
-st.write("Trợ lý thông minh tích hợp công cụ hệ thống và phân tích tài liệu chuyên sâu.")
+st.write("Trợ lý thông minh tích hợp công cụ hệ thống và quản lý tài liệu chuyên sâu.")
 
 # Lấy Groq API Key
 groq_api_key = st.secrets.get("GROQ_API_KEY") or os.environ.get("GROQ_API_KEY")
@@ -147,39 +147,53 @@ tools_definition = [
     }
 ]
 
-# ==================== GIAO DIỆN & XỬ LÝ TÀI LIỆU ====================
+# ==================== GIAO DIỆN & QUẢN LÝ TÀI LIỆU SIDEBAR ====================
 
 if "messages" not in st.session_state:
     st.session_state.messages = load_history()
 
-if "doc_content" not in st.session_state:
-    st.session_state.doc_content = ""
+# Quản lý danh sách tài liệu dạng từ điển: { tên_file: nội_dung }
+if "uploaded_docs" not in st.session_state:
+    st.session_state.uploaded_docs = {}
 
 with st.sidebar:
-    st.header("📚 Kho tài liệu tri thức")
-    uploaded_file = st.file_uploader("Tải lên tài liệu (PDF hoặc TXT)", type=["pdf", "txt"])
+    st.header("📚 Quản lý tài liệu")
+    uploaded_file = st.file_uploader("Tải lên tài liệu mới (PDF hoặc TXT)", type=["pdf", "txt"])
     
     if uploaded_file is not None:
-        try:
-            if uploaded_file.name.endswith(".pdf"):
-                reader = PdfReader(uploaded_file)
-                text = ""
-                for page in reader.pages:
-                    extracted = page.extract_text()
-                    if extracted:
-                        text += extracted + "\n"
-                st.session_state.doc_content = text
-            else:
-                st.session_state.doc_content = uploaded_file.getvalue().decode("utf-8")
-            
-            st.success(f"Đã đọc xong tài liệu: {uploaded_file.name}")
-        except Exception as e:
-            st.error(f"Lỗi đọc tài liệu: {str(e)}")
+        file_name = uploaded_file.name
+        if file_name not in st.session_state.uploaded_docs:
+            try:
+                if file_name.endswith(".pdf"):
+                    reader = PdfReader(uploaded_file)
+                    text = ""
+                    for page in reader.pages:
+                        extracted = page.extract_text()
+                        if extracted:
+                            text += extracted + "\n"
+                    st.session_state.uploaded_docs[file_name] = text
+                else:
+                    st.session_state.uploaded_docs[file_name] = uploaded_file.getvalue().decode("utf-8")
+                
+                st.success(f"Đã thêm: {file_name}")
+            except Exception as e:
+                st.error(f"Lỗi đọc file: {str(e)}")
+
+    # Hiển thị danh sách các file đang có trong bộ nhớ
+    if st.session_state.uploaded_docs:
+        st.markdown("### 📄 Danh sách file hiện có:")
+        selected_file_to_remove = st.selectbox("Chọn file để xóa (nếu muốn)", ["-- Chọn file --"] + list(st.session_state.uploaded_docs.keys()))
+        
+        if selected_file_to_remove != "-- Chọn file --":
+            if st.button("🗑️ Xóa file đã chọn"):
+                del st.session_state.uploaded_docs[selected_file_to_remove]
+                st.success(f"Đã xóa file {selected_file_to_remove}")
+                st.rerun()
 
     st.markdown("---")
-    if st.button("🗑️ Xóa bộ nhớ trò chuyện"):
+    if st.button("🗑️ Xóa toàn bộ lịch sử chat"):
         st.session_state.messages = [st.session_state.messages[0]] if st.session_state.messages else []
-        st.session_state.doc_content = ""
+        st.session_state.uploaded_docs = {}
         if os.path.exists(HISTORY_FILE):
             os.remove(HISTORY_FILE)
         st.rerun()
@@ -200,12 +214,16 @@ if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài li
     with st.chat_message("assistant"):
         with st.status("Đang xử lý...", expanded=False) as status:
             
-            # Nếu có tài liệu, chúng ta gửi trực tiếp câu hỏi kèm nội dung tài liệu dạng system/user prompt thuần túy
-            if st.session_state.doc_content:
-                short_doc = st.session_state.doc_content[:10000] # Giới hạn nội dung an toàn
+            # Gộp toàn bộ nội dung các file đang có trong danh sách vào ngữ cảnh cho AI
+            combined_docs = ""
+            if st.session_state.uploaded_docs:
+                for fname, fcontent in st.session_state.uploaded_docs.items():
+                    combined_docs += f"\n--- TÀI LIỆU: {fname} ---\n{fcontent[:5000]}\n"
+
+            if combined_docs:
                 prompt_messages = [
-                    {"role": "system", "content": "Bạn là trợ lý chuyên phân tích tài liệu kỹ thuật, hãy trả lời câu hỏi dựa hoàn toàn vào nội dung tài liệu được cung cấp dưới đây."},
-                    {"role": "user", "content": f"Nội dung tài liệu:\n{short_doc}\n\nCâu hỏi: {user_input}"}
+                    {"role": "system", "content": "Bạn là trợ lý chuyên phân tích tài liệu, hãy trả lời câu hỏi dựa hoàn toàn vào các tài liệu được cung cấp dưới đây."},
+                    {"role": "user", "content": f"{combined_docs}\n\nCâu hỏi: {user_input}"}
                 ]
                 response = client.chat.completions.create(
                     model=MODEL_NAME,
@@ -213,7 +231,7 @@ if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài li
                 )
                 final_content = response.choices[0].message.content
             else:
-                # Chế độ chat thông thường có dùng Tools
+                # Chế độ thông thường có dùng Tools
                 api_messages = list(st.session_state.messages)
                 response = client.chat.completions.create(
                     model=MODEL_NAME,
