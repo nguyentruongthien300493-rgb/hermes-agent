@@ -38,7 +38,7 @@ def load_history():
 
 def save_history(messages):
     try:
-        clean_msgs = [m for m in messages if m.get("role"] in ["user", "assistant", "system"]]
+        clean_msgs = [m for m in messages if m.get("role") in ["user", "assistant", "system"]]
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump(clean_msgs, f, ensure_ascii=False, indent=4)
     except Exception as e:
@@ -152,14 +152,12 @@ tools_definition = [
 if "messages" not in st.session_state:
     st.session_state.messages = load_history()
 
-# Sử dụng st.session_state thuần túy (khi F5 trang sẽ tự động mất hết file)
 if "uploaded_docs" not in st.session_state:
     st.session_state.uploaded_docs = {}
 
 with st.sidebar:
     st.header("📚 Quản lý tài liệu")
     
-    # Cho phép chọn nhiều file cùng lúc
     uploaded_files = st.file_uploader("Tải lên tài liệu (chọn nhiều file PDF hoặc TXT)", type=["pdf", "txt"], accept_multiple_files=True)
     
     if uploaded_files:
@@ -181,7 +179,6 @@ with st.sidebar:
                 except Exception as e:
                     st.error(f"Lỗi đọc file {file_name}: {str(e)}")
 
-    # Hiển thị danh sách file kèm checkbox bật/tắt
     if st.session_state.uploaded_docs:
         st.markdown("### 📄 Danh sách file hiện có:")
         st.write("Tích chọn file để đưa vào phân tích:")
@@ -223,7 +220,6 @@ if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài li
     with st.chat_message("assistant"):
         with st.status("Đang xử lý...", expanded=False) as status:
             
-            # Chỉ tổng hợp nội dung của các file đang được tích chọn (active == True)
             combined_docs = ""
             if st.session_state.uploaded_docs:
                 for fname, data in st.session_state.uploaded_docs.items():
@@ -241,7 +237,6 @@ if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài li
                 )
                 final_content = response.choices[0].message.content
             else:
-                # Chế độ thông thường có dùng Tools
                 api_messages = list(st.session_state.messages)
                 response = client.chat.completions.create(
                     model=MODEL_NAME,
