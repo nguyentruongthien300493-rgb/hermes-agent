@@ -1,5 +1,8 @@
 streamlit
 groq
 psutil
-duckduckgo_search
 pypdf
+python-docx
+pandas
+openpyxl
+duckduckgo-search
