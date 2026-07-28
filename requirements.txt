@@ -2,7 +2,4 @@ streamlit
 groq
 psutil
 duckduckgo_search
-langchain
-langchain-community
-chromadb
 pypdf
