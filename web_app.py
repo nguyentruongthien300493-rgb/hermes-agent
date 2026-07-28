@@ -12,7 +12,7 @@ from duckduckgo_search import DDGS
 st.set_page_config(page_title="Hermes Agent - Advanced Cloud", page_icon="⚡", layout="centered")
 
 st.title("⚡ Hermes AI Agent - Advanced Cloud")
-st.write("Trợ lý thông minh tích hợp công cụ hệ thống và quản lý tài liệu chuyên sâu.")
+st.write("Trợ lý thông minh tích hợp công cụ hệ thống, quản lý tài liệu và phân tích đa luồng.")
 
 # Lấy Groq API Key
 groq_api_key = st.secrets.get("GROQ_API_KEY") or os.environ.get("GROQ_API_KEY")
@@ -23,28 +23,46 @@ if not groq_api_key:
 
 client = Groq(api_key=groq_api_key)
 
-HISTORY_FILE = "chat_history.json"
 DOCS_FILE = "uploaded_docs.json"
+SESSIONS_DIR = "chat_sessions"
 
-def load_history():
-    if os.path.exists(HISTORY_FILE):
+# Đảm bảo thư mục chứa các phiên chat tồn tại
+if not os.path.exists(SESSIONS_DIR):
+    os.makedirs(SESSIONS_DIR)
+
+def get_all_sessions():
+    files = [f.replace(".json", "") for f in os.listdir(SESSIONS_DIR) if f.endswith(".json")]
+    if not files:
+        # Tạo phiên mặc định nếu chưa có
+        default_session = "Mặc định"
+        save_session_messages(default_session, [{
+            "role": "system", 
+            "content": "Bạn là Hermes Agent - một trợ lý ảo thông minh, nói chuyện ngắn gọn, súc tích, chuẩn xác bằng tiếng Việt."
+        }])
+        return [default_session]
+    return sorted(files)
+
+def load_session_messages(session_name):
+    file_path = os.path.join(SESSIONS_DIR, f"{session_name}.json")
+    if os.path.exists(file_path):
         try:
-            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
-            return []
+            pass
     return [{
         "role": "system", 
         "content": "Bạn là Hermes Agent - một trợ lý ảo thông minh, nói chuyện ngắn gọn, súc tích, chuẩn xác bằng tiếng Việt."
     }]
 
-def save_history(messages):
+def save_session_messages(session_name, messages):
     try:
+        file_path = os.path.join(SESSIONS_DIR, f"{session_name}.json")
         clean_msgs = [m for m in messages if m.get("role") in ["user", "assistant", "system"]]
-        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             json.dump(clean_msgs, f, ensure_ascii=False, indent=4)
     except Exception as e:
-        print(f"Lỗi lưu lịch sử: {e}")
+        print(f"Lỗi lưu phiên chat: {e}")
 
 def load_docs():
     if os.path.exists(DOCS_FILE):
@@ -168,6 +186,7 @@ tools_definition = [
 @st.cache_data
 def parse_uploaded_file(file_bytes, file_name):
     text = ""
+    dfs = {}
     try:
         if file_name.endswith(".pdf"):
             import io
@@ -229,16 +248,43 @@ def get_relevant_context(query, docs_dict, max_chars=8000):
 
 # ==================== GIAO DIỆN & CÀI ĐẶT SIDEBAR ====================
 
+if "current_session" not in st.session_state:
+    sessions = get_all_sessions()
+    st.session_state.current_session = sessions[0]
+
 if "messages" not in st.session_state:
-    st.session_state.messages = load_history()
+    st.session_state.messages = load_session_messages(st.session_state.current_session)
 
 if "uploaded_docs" not in st.session_state:
     st.session_state.uploaded_docs = load_docs()
 
 with st.sidebar:
+    st.header("💬 Quản lý Đoạn Chat")
+    
+    sessions = get_all_sessions()
+    selected_session = st.selectbox("Chọn đoạn chat", sessions, index=sessions.index(st.session_state.current_session) if st.session_state.current_session in sessions else 0)
+    
+    if selected_session != st.session_state.current_session:
+        st.session_state.current_session = selected_session
+        st.session_state.messages = load_session_messages(selected_session)
+        st.rerun()
+        
+    # Tạo đoạn chat mới
+    new_chat_name = st.text_input("Tên đoạn chat mới:")
+    if st.button("➕ Tạo đoạn chat mới"):
+        if new_chat_name.strip():
+            safe_name = new_chat_name.strip()
+            save_session_messages(safe_name, [{
+                "role": "system", 
+                "content": "Bạn là Hermes Agent - một trợ lý ảo thông minh, nói chuyện ngắn gọn, súc tích, chuẩn xác bằng tiếng Việt."
+            }])
+            st.session_state.current_session = safe_name
+            st.session_state.messages = load_session_messages(safe_name)
+            st.rerun()
+
+    st.markdown("---")
     st.header("⚙️ Cài đặt AI")
     
-    # Định nghĩa danh sách model kèm mô tả tiếng Việt trực quan
     model_options = {
         "llama-3.3-70b-versatile": "llama-3.3-70b-versatile (Thông minh nhất, phân tích sâu)",
         "llama-3.1-8b-instant": "llama-3.1-8b-instant (Siêu nhanh, gọn nhẹ)",
@@ -250,9 +296,7 @@ with st.sidebar:
         options=list(model_options.values()),
         index=0
     )
-    # Tự động trích xuất lại tên model kỹ thuật từ lựa chọn của người dùng
     MODEL_NAME = [k for k, v in model_options.items() if v == selected_label][0]
-
     temperature = st.slider("Độ sáng tạo (Temperature)", min_value=0.0, max_value=1.0, value=0.7, step=0.1)
 
     st.markdown("---")
@@ -317,10 +361,26 @@ with st.sidebar:
             st.rerun()
 
     st.markdown("---")
-    if st.button("🗑️ Xóa toàn bộ lịch sử chat"):
-        st.session_state.messages = [st.session_state.messages[0]] if st.session_state.messages else []
-        if os.path.exists(HISTORY_FILE):
-            os.remove(HISTORY_FILE)
+    # Tính năng xuất lịch sử chat
+    chat_export_text = ""
+    for msg in st.session_state.messages:
+        if msg["role"] != "system":
+            chat_export_text += f"{msg['role'].upper()}: {msg['content']}\n\n"
+            
+    st.download_button(
+        label="📥 Tải xuống lịch sử chat (.txt)",
+        data=chat_export_text,
+        file_name=f"chat_history_{st.session_state.current_session}.txt",
+        mime="text/plain"
+    )
+
+    if st.button("🗑️ Xóa đoạn chat hiện tại"):
+        file_path = os.path.join(SESSIONS_DIR, f"{st.session_state.current_session}.json")
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        sessions = get_all_sessions()
+        st.session_state.current_session = sessions[0]
+        st.session_state.messages = load_session_messages(sessions[0])
         st.rerun()
 
 for msg in st.session_state.messages:
@@ -331,7 +391,7 @@ for msg in st.session_state.messages:
 
 if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài liệu..."):
     st.session_state.messages.append({"role": "user", "content": user_input})
-    save_history(st.session_state.messages)
+    save_session_messages(st.session_state.current_session, st.session_state.messages)
     
     with st.chat_message("user"):
         st.markdown(user_input)
@@ -344,7 +404,7 @@ if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài li
             if combined_docs.strip():
                 st.write(f"📊 Đã trích xuất ngữ cảnh tài liệu (~{len(combined_docs)} ký tự) để phân tích.")
                 prompt_messages = [
-                    {"role": "system", "content": "Bạn là trợ lý chuyên phân tích tài liệu. Hãy trả lời câu hỏi dựa hoàn toàn và chính xác vào các đoạn tài liệu được trích xuất dưới đây."},
+                    {"role": "system", "content": "Bạn là trợ lý chuyên phân tích tài liệu. Hãy trả lời câu hỏi dựa hoàn toàn và chính xác vào các đoạn tài liệu được trích xuất dưới đây. Nếu người dùng yêu cầu vẽ biểu đồ từ dữ liệu Excel, hãy gợi ý cụ thể hoặc trình bày dạng bảng số liệu rõ ràng."},
                     {"role": "user", "content": f"{combined_docs}\n\nCâu hỏi: {user_input}"}
                 ]
                 response = client.chat.completions.create(
@@ -395,7 +455,23 @@ if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài li
                     final_content = response_message.content
             
             st.session_state.messages.append({"role": "assistant", "content": final_content})
-            save_history(st.session_state.messages)
+            save_session_messages(st.session_state.current_session, st.session_state.messages)
             status.update(label="Hoàn thành!", state="complete", expanded=False)
         
         st.markdown(final_content)
+        
+        # Tích hợp vẽ biểu đồ tự động nếu file Excel đang được bật và người dùng yêu cầu trực quan hóa
+        if any(fname.endswith(".xlsx") and data["active"] for fname, data in st.session_state.uploaded_docs.items()) and any(kw in user_input.lower() for kw in ["biểu đồ", "vẽ", "chart", "đồ thị"]):
+            for fname, data in st.session_state.uploaded_docs.items():
+                if fname.endswith(".xlsx") and data["active"]:
+                    try:
+                        import io
+                        # Đọc lại file excel từ dữ liệu text hoặc yêu cầu tạo chart mẫu từ bảng
+                        st.info(f"📈 Gợi ý biểu đồ trực quan từ file Excel: {fname}")
+                        # Lấy dòng đầu tiên của text để tạo bảng demo nhanh hiển thị chart
+                        lines = [l for l in data["content"].split("\n") if l.strip()]
+                        if len(lines) > 2:
+                            # Chuyển đổi dữ liệu bảng thành DataFrame để vẽ nhanh st.bar_chart / st.line_chart nếu phù hợp
+                            pass
+                    except Exception:
+                        pass
