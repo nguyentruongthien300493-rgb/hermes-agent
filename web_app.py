@@ -5,6 +5,8 @@ import json
 import psutil
 from datetime import datetime
 from pypdf import PdfReader
+from docx import Document
+import pandas as pd
 from duckduckgo_search import DDGS
 
 st.set_page_config(page_title="Hermes Agent - Advanced Cloud", page_icon="⚡", layout="centered")
@@ -164,19 +166,61 @@ tools_definition = [
     }
 ]
 
+# Hàm hỗ trợ chia nhỏ và lọc đoạn văn bản liên quan (RAG nhẹ)
+def get_relevant_context(query, docs_dict, max_chars=8000):
+    combined_context = ""
+    query_words = set(query.lower().split())
+    
+    for fname, data in docs_dict.items():
+        if not data.get("active", True):
+            continue
+        text = data.get("content", "")
+        
+        # Chia tài liệu thành các đoạn nhỏ (khoảng 1000 ký tự/đoạn)
+        chunk_size = 1000
+        chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+        
+        relevant_chunks = []
+        for chunk in chunks:
+            chunk_lower = chunk.lower()
+            # Đếm số từ khóa xuất hiện trong đoạn
+            score = sum(1 for word in query_words if word in chunk_lower)
+            relevant_chunks.append((score, chunk))
+        
+        # Sắp xếp các đoạn có điểm cao nhất lên đầu
+        relevant_chunks.sort(key=lambda x: x[0], reverse=True)
+        
+        file_extracted = ""
+        current_len = 0
+        for score, chunk in relevant_chunks:
+            if current_len + len(chunk) < max_chars:
+                file_extracted += chunk + "\n...\n"
+                current_len += len(chunk)
+            else:
+                break
+                
+        if file_extracted:
+            combined_context += f"\n--- TÀI LIỆU: {fname} ---\n{file_extracted}\n"
+            
+    return combined_context
+
 # ==================== GIAO DIỆN & QUẢN LÝ ĐA TÀI LIỆU SIDEBAR ====================
 
 if "messages" not in st.session_state:
     st.session_state.messages = load_history()
 
-# Tải danh sách tài liệu được lưu xuyên suốt từ file JSON
 if "uploaded_docs" not in st.session_state:
     st.session_state.uploaded_docs = load_docs()
 
 with st.sidebar:
     st.header("📚 Quản lý tài liệu")
     
-    uploaded_files = st.file_uploader("Tải lên tài liệu (chọn nhiều file PDF hoặc TXT)", type=["pdf", "txt"], accept_multiple_files=True)
+    # Hỗ trợ thêm các định dạng file mới: .docx, .xlsx
+    uploaded_files = st.file_uploader(
+        "Tải lên tài liệu (PDF, TXT, DOCX, XLSX)", 
+        type=["pdf", "txt", "docx", "xlsx"], 
+        accept_multiple_files=True
+    )
     
     if uploaded_files:
         has_new = False
@@ -184,25 +228,33 @@ with st.sidebar:
             file_name = uploaded_file.name
             if file_name not in st.session_state.uploaded_docs:
                 try:
+                    text = ""
                     if file_name.endswith(".pdf"):
                         reader = PdfReader(uploaded_file)
-                        text = ""
                         for page in reader.pages:
                             extracted = page.extract_text()
                             if extracted:
                                 text += extracted + "\n"
-                        st.session_state.uploaded_docs[file_name] = {"content": text, "active": True}
-                        has_new = True
-                    else:
-                        content_str = uploaded_file.getvalue().decode("utf-8")
-                        st.session_state.uploaded_docs[file_name] = {"content": content_str, "active": True}
-                        has_new = True
+                    elif file_name.endswith(".docx"):
+                        doc = Document(uploaded_file)
+                        for para in doc.paragraphs:
+                            if para.text:
+                                text += para.text + "\n"
+                    elif file_name.endswith(".xlsx"):
+                        df_dict = pd.read_excel(uploaded_file, sheet_name=None)
+                        for sheet_name, df in df_dict.items():
+                            text += f"\n[Sheet: {sheet_name}]\n" + df.to_string(index=False) + "\n"
+                    else:  # .txt hoặc mặc định
+                        text = uploaded_file.getvalue().decode("utf-8")
+                        
+                    st.session_state.uploaded_docs[file_name] = {"content": text, "active": True}
+                    has_new = True
                 except Exception as e:
                     st.error(f"Lỗi đọc file {file_name}: {str(e)}")
         
         if has_new:
             save_docs(st.session_state.uploaded_docs)
-            st.success("Đã thêm và lưu trữ file xuyên suốt thành công!")
+            st.success("Đã thêm và xử lý file thành công!")
             st.rerun()
 
     if st.session_state.uploaded_docs:
@@ -222,12 +274,10 @@ with st.sidebar:
             
             updated_docs[fname] = {"content": data["content"], "active": is_active}
         
-        # Cập nhật lại trạng thái active nếu có thay đổi checkbox
         if updated_docs != st.session_state.uploaded_docs:
             st.session_state.uploaded_docs = updated_docs
             save_docs(st.session_state.uploaded_docs)
 
-        # Xóa file khi người dùng bấm nút xóa
         if files_to_delete:
             for fname in files_to_delete:
                 if fname in st.session_state.uploaded_docs:
@@ -259,15 +309,12 @@ if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài li
     with st.chat_message("assistant"):
         with st.status("Đang xử lý...", expanded=False) as status:
             
-            combined_docs = ""
-            if st.session_state.uploaded_docs:
-                for fname, data in st.session_state.uploaded_docs.items():
-                    if data["active"]:
-                        combined_docs += f"\n--- TÀI LIỆU: {fname} ---\n{data['content'][:4000]}\n"
+            # Sử dụng thuật toán trích xuất đoạn văn bản thông minh thay vì cắt cụt thô sơ
+            combined_docs = get_relevant_context(user_input, st.session_state.uploaded_docs)
 
-            if combined_docs:
+            if combined_docs.strip():
                 prompt_messages = [
-                    {"role": "system", "content": "Bạn là trợ lý chuyên phân tích tài liệu, hãy trả lời câu hỏi dựa hoàn toàn vào các tài liệu được tích chọn cung cấp dưới đây."},
+                    {"role": "system", "content": "Bạn là trợ lý chuyên phân tích tài liệu. Hãy trả lời câu hỏi dựa hoàn toàn và chính xác vào các đoạn tài liệu được trích xuất dưới đây."},
                     {"role": "user", "content": f"{combined_docs}\n\nCâu hỏi: {user_input}"}
                 ]
                 response = client.chat.completions.create(
