@@ -38,7 +38,7 @@ def load_history():
 
 def save_history(messages):
     try:
-        clean_msgs = [m for m in messages if m.get("role") in ["user", "assistant", "system"]]
+        clean_msgs = [m for m in messages if m.get("role"] in ["user", "assistant", "system"]]
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump(clean_msgs, f, ensure_ascii=False, indent=4)
     except Exception as e:
@@ -152,14 +152,14 @@ tools_definition = [
 if "messages" not in st.session_state:
     st.session_state.messages = load_history()
 
-# Lưu trữ danh sách tài liệu: { tên_file: { "content": nội_dung, "active": trạng_thái_chọn } }
+# Sử dụng st.session_state thuần túy (khi F5 trang sẽ tự động mất hết file)
 if "uploaded_docs" not in st.session_state:
     st.session_state.uploaded_docs = {}
 
 with st.sidebar:
     st.header("📚 Quản lý tài liệu")
     
-    # Cho phép chọn nhiều file cùng lúc (accept_multiple_files=True)
+    # Cho phép chọn nhiều file cùng lúc
     uploaded_files = st.file_uploader("Tải lên tài liệu (chọn nhiều file PDF hoặc TXT)", type=["pdf", "txt"], accept_multiple_files=True)
     
     if uploaded_files:
@@ -181,12 +181,11 @@ with st.sidebar:
                 except Exception as e:
                     st.error(f"Lỗi đọc file {file_name}: {str(e)}")
 
-    # Hiển thị danh sách file kèm checkbox để bật/tắt hoặc xóa
+    # Hiển thị danh sách file kèm checkbox bật/tắt
     if st.session_state.uploaded_docs:
         st.markdown("### 📄 Danh sách file hiện có:")
         st.write("Tích chọn file để đưa vào phân tích:")
         
-        # Danh sách tạm để cập nhật trạng thái
         updated_docs = {}
         for fname, data in st.session_state.uploaded_docs.items():
             is_active = st.checkbox(fname, value=data["active"], key=f"chk_{fname}")
@@ -195,17 +194,15 @@ with st.sidebar:
         st.session_state.uploaded_docs = updated_docs
 
         st.markdown("---")
-        selected_file_to_remove = st.selectbox("Chọn file để xóa", ["-- Chọn file --"] + list(st.session_state.uploaded_docs.keys()))
+        selected_file_to_remove = st.selectbox("Chọn file để xóa", ["-- Chọn file --"] + list(st.session_state.uploaded_docs.keys()), key="sel_remove_file")
         if selected_file_to_remove != "-- Chọn file --":
             if st.button("🗑️ Xóa file đã chọn"):
                 del st.session_state.uploaded_docs[selected_file_to_remove]
-                st.success(f"Đã xóa file {selected_file_to_remove}")
                 st.rerun()
 
     st.markdown("---")
-    if st.button("🗑️ Xóa toàn bộ lịch sử & file"):
+    if st.button("🗑️ Xóa toàn bộ lịch sử chat"):
         st.session_state.messages = [st.session_state.messages[0]] if st.session_state.messages else []
-        st.session_state.uploaded_docs = {}
         if os.path.exists(HISTORY_FILE):
             os.remove(HISTORY_FILE)
         st.rerun()
