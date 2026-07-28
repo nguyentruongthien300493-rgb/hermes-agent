@@ -12,7 +12,7 @@ from duckduckgo_search import DDGS
 st.set_page_config(page_title="Hermes Agent - Advanced Cloud", page_icon="⚡", layout="centered")
 
 st.title("⚡ Hermes AI Agent - Advanced Cloud")
-st.write("Trợ lý thông minh tích hợp công cụ hệ thống, quản lý tài liệu và phân tích đa luồng.")
+st.write("Trợ lý thông minh tích hợp công cụ hệ thống, quản lý tài liệu và phân tích đa luồng chuyên sâu.")
 
 # Lấy Groq API Key
 groq_api_key = st.secrets.get("GROQ_API_KEY") or os.environ.get("GROQ_API_KEY")
@@ -26,14 +26,12 @@ client = Groq(api_key=groq_api_key)
 DOCS_FILE = "uploaded_docs.json"
 SESSIONS_DIR = "chat_sessions"
 
-# Đảm bảo thư mục chứa các phiên chat tồn tại
 if not os.path.exists(SESSIONS_DIR):
     os.makedirs(SESSIONS_DIR)
 
 def get_all_sessions():
     files = [f.replace(".json", "") for f in os.listdir(SESSIONS_DIR) if f.endswith(".json")]
     if not files:
-        # Tạo phiên mặc định nếu chưa có
         default_session = "Mặc định"
         save_session_messages(default_session, [{
             "role": "system", 
@@ -186,7 +184,6 @@ tools_definition = [
 @st.cache_data
 def parse_uploaded_file(file_bytes, file_name):
     text = ""
-    dfs = {}
     try:
         if file_name.endswith(".pdf"):
             import io
@@ -269,7 +266,6 @@ with st.sidebar:
         st.session_state.messages = load_session_messages(selected_session)
         st.rerun()
         
-    # Tạo đoạn chat mới
     new_chat_name = st.text_input("Tên đoạn chat mới:")
     if st.button("➕ Tạo đoạn chat mới"):
         if new_chat_name.strip():
@@ -283,7 +279,7 @@ with st.sidebar:
             st.rerun()
 
     st.markdown("---")
-    st.header("⚙️ Cài đặt AI")
+    st.header("⚙️ Cài đặt AI & Tối ưu")
     
     model_options = {
         "llama-3.3-70b-versatile": "llama-3.3-70b-versatile (Thông minh nhất, phân tích sâu)",
@@ -297,7 +293,16 @@ with st.sidebar:
         index=0
     )
     MODEL_NAME = [k for k, v in model_options.items() if v == selected_label][0]
-    temperature = st.slider("Độ sáng tạo (Temperature)", min_value=0.0, max_value=1.0, value=0.7, step=0.1)
+    
+    # Hướng dẫn tận dụng: Tùy chỉnh Temperature linh hoạt tùy theo tác vụ
+    temperature = st.slider(
+        "Độ sáng tạo (Temperature)", 
+        min_value=0.0, 
+        max_value=1.0, 
+        value=0.3, 
+        step=0.1, 
+        help="0.0 - 0.3: Phù hợp phân tích tài liệu, code, số liệu chính xác.\n0.7 - 1.0: Phù hợp viết văn, sáng tạo ý tưởng."
+    )
 
     st.markdown("---")
     st.header("📚 Quản lý tài liệu")
@@ -324,22 +329,25 @@ with st.sidebar:
             st.rerun()
 
     if st.session_state.uploaded_docs:
-        st.markdown("### 📄 Danh sách file & Xem trước:")
+        st.markdown("### 📄 Danh sách file & Thống kê:")
         
         files_to_delete = []
         updated_docs = {}
         
         for fname, data in list(st.session_state.uploaded_docs.items()):
-            col1, col2, col3 = st.columns([0.6, 0.2, 0.2])
+            char_count = len(data["content"])
+            col1, col2, col3 = st.columns([0.5, 0.25, 0.25])
             with col1:
-                is_active = st.checkbox(fname, value=data["active"], key=f"chk_{fname}")
+                is_active = st.checkbox(f"{fname[:12]}...", value=data["active"], key=f"chk_{fname}", help=fname)
             with col2:
-                if st.button("👁️", key=f"prev_{fname}", help=f"Xem nhanh nội dung {fname}"):
+                if st.button("👁️ Xem", key=f"prev_{fname}", help=f"Xem nhanh nội dung {fname}"):
                     st.session_state[f"show_preview_{fname}"] = not st.session_state.get(f"show_preview_{fname}", False)
             with col3:
-                if st.button("🗑️", key=f"del_btn_{fname}", help=f"Xóa file {fname}"):
+                if st.button("🗑️ Xóa", key=f"del_btn_{fname}", help=f"Xóa file {fname}"):
                     files_to_delete.append(fname)
             
+            st.caption(f"Trạng thái: {'🟢 Bật' if is_active else '⚪ Tắt'} | Ký tự: {char_count:,}")
+
             if st.session_state.get(f"show_preview_{fname}", False):
                 with st.expander(f"📖 Nội dung: {fname}", expanded=True):
                     st.text_area("Văn bản trích xuất:", data["content"][:2000] + ("\n...[Đã lược bớt nội dung dài]..." if len(data["content"]) > 2000 else ""), height=150, key=f"txt_prev_{fname}")
@@ -361,7 +369,6 @@ with st.sidebar:
             st.rerun()
 
     st.markdown("---")
-    # Tính năng xuất lịch sử chat
     chat_export_text = ""
     for msg in st.session_state.messages:
         if msg["role"] != "system":
@@ -383,13 +390,32 @@ with st.sidebar:
         st.session_state.messages = load_session_messages(sessions[0])
         st.rerun()
 
+# ==================== KHU VỰC GỢI Ý NHANH (QUICK PROMPTS) ====================
+st.markdown("💡 **Gợi ý tác vụ nhanh:**")
+cols_quick = st.columns(3)
+quick_query = None
+with cols_quick[0]:
+    if st.button("📑 Tóm tắt tài liệu bật"):
+        quick_query = "Hãy tóm tắt ngắn gọn các điểm chính của toàn bộ các tài liệu đang bật."
+with cols_quick[1]:
+    if st.button("🔍 Tìm ý chính/Điều khoản"):
+        quick_query = "Hãy chỉ ra các điều khoản hoặc thông tin quan trọng nhất có trong tài liệu."
+with cols_quick[2]:
+    if st.button("📈 Phân tích số liệu"):
+        quick_query = "Hãy phân tích các số liệu cốt lõi hoặc bảng dữ liệu có trong tài liệu."
+
 for msg in st.session_state.messages:
     if msg["role"] not in ["tool", "system"]:
         if "content" in msg and msg["content"]:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
-if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài liệu..."):
+# Nhận input từ khung chat hoặc nút gợi ý nhanh
+user_input = st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài liệu...")
+if quick_query:
+    user_input = quick_query
+
+if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
     save_session_messages(st.session_state.current_session, st.session_state.messages)
     
@@ -404,7 +430,7 @@ if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài li
             if combined_docs.strip():
                 st.write(f"📊 Đã trích xuất ngữ cảnh tài liệu (~{len(combined_docs)} ký tự) để phân tích.")
                 prompt_messages = [
-                    {"role": "system", "content": "Bạn là trợ lý chuyên phân tích tài liệu. Hãy trả lời câu hỏi dựa hoàn toàn và chính xác vào các đoạn tài liệu được trích xuất dưới đây. Nếu người dùng yêu cầu vẽ biểu đồ từ dữ liệu Excel, hãy gợi ý cụ thể hoặc trình bày dạng bảng số liệu rõ ràng."},
+                    {"role": "system", "content": "Bạn là trợ lý chuyên phân tích tài liệu. Hãy trả lời câu hỏi dựa hoàn toàn và chính xác vào các đoạn tài liệu được trích xuất dưới đây."},
                     {"role": "user", "content": f"{combined_docs}\n\nCâu hỏi: {user_input}"}
                 ]
                 response = client.chat.completions.create(
@@ -459,19 +485,3 @@ if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài li
             status.update(label="Hoàn thành!", state="complete", expanded=False)
         
         st.markdown(final_content)
-        
-        # Tích hợp vẽ biểu đồ tự động nếu file Excel đang được bật và người dùng yêu cầu trực quan hóa
-        if any(fname.endswith(".xlsx") and data["active"] for fname, data in st.session_state.uploaded_docs.items()) and any(kw in user_input.lower() for kw in ["biểu đồ", "vẽ", "chart", "đồ thị"]):
-            for fname, data in st.session_state.uploaded_docs.items():
-                if fname.endswith(".xlsx") and data["active"]:
-                    try:
-                        import io
-                        # Đọc lại file excel từ dữ liệu text hoặc yêu cầu tạo chart mẫu từ bảng
-                        st.info(f"📈 Gợi ý biểu đồ trực quan từ file Excel: {fname}")
-                        # Lấy dòng đầu tiên của text để tạo bảng demo nhanh hiển thị chart
-                        lines = [l for l in data["content"].split("\n") if l.strip()]
-                        if len(lines) > 2:
-                            # Chuyển đổi dữ liệu bảng thành DataFrame để vẽ nhanh st.bar_chart / st.line_chart nếu phù hợp
-                            pass
-                    except Exception:
-                        pass
