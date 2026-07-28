@@ -152,6 +152,7 @@ tools_definition = [
 if "messages" not in st.session_state:
     st.session_state.messages = load_history()
 
+# Lưu trữ file tạm thời trong phiên làm việc (F5 sẽ tự mất sạch)
 if "uploaded_docs" not in st.session_state:
     st.session_state.uploaded_docs = {}
 
@@ -184,7 +185,7 @@ with st.sidebar:
         st.write("Tích chọn file để đưa vào phân tích:")
         
         updated_docs = {}
-        for fname, data in st.session_state.uploaded_docs.items():
+        for fname, data in list(st.session_state.uploaded_docs.items()):
             is_active = st.checkbox(fname, value=data["active"], key=f"chk_{fname}")
             updated_docs[fname] = {"content": data["content"], "active": is_active}
         
@@ -192,10 +193,13 @@ with st.sidebar:
 
         st.markdown("---")
         selected_file_to_remove = st.selectbox("Chọn file để xóa", ["-- Chọn file --"] + list(st.session_state.uploaded_docs.keys()), key="sel_remove_file")
+        
         if selected_file_to_remove != "-- Chọn file --":
-            if st.button("🗑️ Xóa file đã chọn"):
-                del st.session_state.uploaded_docs[selected_file_to_remove]
-                st.rerun()
+            if st.button("🗑️ Xóa file đã chọn", key="btn_remove_file_action"):
+                if selected_file_to_remove in st.session_state.uploaded_docs:
+                    del st.session_state.uploaded_docs[selected_file_to_remove]
+                    st.success(f"Đã xóa thành công file: {selected_file_to_remove}")
+                    st.rerun()
 
     st.markdown("---")
     if st.button("🗑️ Xóa toàn bộ lịch sử chat"):
