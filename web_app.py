@@ -38,8 +38,10 @@ def load_history():
 
 def save_history(messages):
     try:
+        # Chỉ lưu các message dạng user/assistant thuần túy để tránh lỗi lịch sử API
+        clean_msgs = [m for m in messages if m.get("role") in ["user", "assistant", "system"]]
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(messages, f, ensure_ascii=False, indent=4)
+            json.dump(clean_msgs, f, ensure_ascii=False, indent=4)
     except Exception as e:
         print(f"Lỗi lưu lịch sử: {e}")
 
@@ -151,7 +153,6 @@ tools_definition = [
 if "messages" not in st.session_state:
     st.session_state.messages = load_history()
 
-# Biến lưu trữ nội dung tài liệu trong bộ nhớ phiên làm việc
 if "doc_content" not in st.session_state:
     st.session_state.doc_content = ""
 
@@ -191,11 +192,6 @@ for msg in st.session_state.messages:
                 st.markdown(msg["content"])
 
 if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài liệu..."):
-    # Gộp nội dung tài liệu vào câu hỏi nếu người dùng đã tải lên
-    final_user_input = user_input
-    if st.session_state.doc_content:
-        final_user_input = f"Dựa vào nội dung tài liệu sau:\n{st.session_state.doc_content[:15000]}\n\nCâu hỏi của tôi là: {user_input}"
-
     st.session_state.messages.append({"role": "user", "content": user_input})
     save_history(st.session_state.messages)
     
@@ -205,21 +201,33 @@ if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài li
     with st.chat_message("assistant"):
         with st.status("Đang xử lý...", expanded=False) as status:
             
-            temp_messages = list(st.session_state.messages)
-            if st.session_state.doc_content:
-                temp_messages[-1]["content"] = final_user_input
+            # Tạo danh sách tin nhắn gửi riêng cho API để tránh làm phình to lịch sử trò chuyện
+            api_messages = list(st.session_state.messages)
+            
+            # Nếu có tài liệu, chỉ chèn nội dung gọn gàng vào câu hỏi mới nhất của user
+            if st.session_state.doc_content and api_messages:
+                # Giới hạn nội dung tài liệu ở mức an toàn (4000 ký tự đầu) để không vượt token limit của Groq
+                short_doc = st.session_state.doc_content[:4000]
+                last_msg_idx = len(api_messages) - 1
+                api_messages[last_msg_idx] = {
+                    "role": "user",
+                    "content": f"Dựa vào nội dung tài liệu sau:\n{short_doc}\n\nYêu cầu/Câu hỏi: {user_input}"
+                }
 
             response = client.chat.completions.create(
                 model=MODEL_NAME,
-                messages=temp_messages,
+                messages=api_messages,
                 tools=tools_definition,
                 tool_choice="auto"
             )
             
             response_message = response.choices[0].message
-            st.session_state.messages.append(response_message.model_dump())
             
+            # Kiểm tra xem mô hình có gọi công cụ (tool) nào không
             if response_message.tool_calls:
+                # Thêm phản hồi có chứa tool_calls vào lịch sử tạm để thực thi
+                api_messages.append(response_message)
+                
                 for tool_call in response_message.tool_calls:
                     func_name = tool_call.function.name
                     func_args = json.loads(tool_call.function.arguments)
@@ -231,7 +239,7 @@ if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài li
                         tool_result = fn(**func_args)
                         st.write(f"📥 Kết quả: `{tool_result}`")
                         
-                        st.session_state.messages.append({
+                        api_messages.append({
                             "role": "tool",
                             "tool_call_id": tool_call.id,
                             "name": func_name,
@@ -240,13 +248,14 @@ if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài li
                 
                 final_response = client.chat.completions.create(
                     model=MODEL_NAME,
-                    messages=st.session_state.messages
+                    messages=api_messages
                 )
                 final_content = final_response.choices[0].message.content
-                st.session_state.messages.append(final_response.choices[0].message.model_dump())
             else:
                 final_content = response_message.content
             
+            # Lưu phản hồi chuẩn của assistant vào lịch sử chính
+            st.session_state.messages.append({"role": "assistant", "content": final_content})
             save_history(st.session_state.messages)
             status.update(label="Hoàn thành!", state="complete", expanded=False)
         
