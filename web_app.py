@@ -22,7 +22,6 @@ if not groq_api_key:
     st.stop()
 
 client = Groq(api_key=groq_api_key)
-MODEL_NAME = "llama-3.3-70b-versatile"
 
 HISTORY_FILE = "chat_history.json"
 DOCS_FILE = "uploaded_docs.json"
@@ -166,7 +165,36 @@ tools_definition = [
     }
 ]
 
-# Hàm hỗ trợ chia nhỏ và lọc đoạn văn bản liên quan (RAG nhẹ)
+# Hàm xử lý tối ưu hóa đọc file với Caching (Đề xuất 4)
+@st.cache_data
+def parse_uploaded_file(file_bytes, file_name):
+    text = ""
+    try:
+        if file_name.endswith(".pdf"):
+            import io
+            reader = PdfReader(io.BytesIO(file_bytes))
+            for page in reader.pages:
+                extracted = page.extract_text()
+                if extracted:
+                    text += extracted + "\n"
+        elif file_name.endswith(".docx"):
+            import io
+            doc = Document(io.BytesIO(file_bytes))
+            for para in doc.paragraphs:
+                if para.text:
+                    text += para.text + "\n"
+        elif file_name.endswith(".xlsx"):
+            import io
+            df_dict = pd.read_excel(io.BytesIO(file_bytes), sheet_name=None)
+            for sheet_name, df in df_dict.items():
+                text += f"\n[Sheet: {sheet_name}]\n" + df.to_string(index=False) + "\n"
+        else:
+            text = file_bytes.decode("utf-8")
+    except Exception as e:
+        text = f"Lỗi đọc file: {str(e)}"
+    return text
+
+# Hàm RAG thông minh lọc đoạn liên quan
 def get_relevant_context(query, docs_dict, max_chars=8000):
     combined_context = ""
     query_words = set(query.lower().split())
@@ -176,18 +204,15 @@ def get_relevant_context(query, docs_dict, max_chars=8000):
             continue
         text = data.get("content", "")
         
-        # Chia tài liệu thành các đoạn nhỏ (khoảng 1000 ký tự/đoạn)
         chunk_size = 1000
         chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
         
         relevant_chunks = []
         for chunk in chunks:
             chunk_lower = chunk.lower()
-            # Đếm số từ khóa xuất hiện trong đoạn
             score = sum(1 for word in query_words if word in chunk_lower)
             relevant_chunks.append((score, chunk))
         
-        # Sắp xếp các đoạn có điểm cao nhất lên đầu
         relevant_chunks.sort(key=lambda x: x[0], reverse=True)
         
         file_extracted = ""
@@ -204,7 +229,7 @@ def get_relevant_context(query, docs_dict, max_chars=8000):
             
     return combined_context
 
-# ==================== GIAO DIỆN & QUẢN LÝ ĐA TÀI LIỆU SIDEBAR ====================
+# ==================== GIAO DIỆN & CÀI ĐẶT SIDEBAR ====================
 
 if "messages" not in st.session_state:
     st.session_state.messages = load_history()
@@ -213,9 +238,18 @@ if "uploaded_docs" not in st.session_state:
     st.session_state.uploaded_docs = load_docs()
 
 with st.sidebar:
+    st.header("⚙️ Cài đặt AI")
+    # Đề xuất 2: Tùy chỉnh Model và Temperature
+    MODEL_NAME = st.selectbox(
+        "Chọn Model AI",
+        ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
+        index=0
+    )
+    temperature = st.slider("Độ sáng tạo (Temperature)", min_value=0.0, max_value=1.0, value=0.7, step=0.1)
+
+    st.markdown("---")
     st.header("📚 Quản lý tài liệu")
     
-    # Hỗ trợ thêm các định dạng file mới: .docx, .xlsx
     uploaded_files = st.file_uploader(
         "Tải lên tài liệu (PDF, TXT, DOCX, XLSX)", 
         type=["pdf", "txt", "docx", "xlsx"], 
@@ -227,50 +261,38 @@ with st.sidebar:
         for uploaded_file in uploaded_files:
             file_name = uploaded_file.name
             if file_name not in st.session_state.uploaded_docs:
-                try:
-                    text = ""
-                    if file_name.endswith(".pdf"):
-                        reader = PdfReader(uploaded_file)
-                        for page in reader.pages:
-                            extracted = page.extract_text()
-                            if extracted:
-                                text += extracted + "\n"
-                    elif file_name.endswith(".docx"):
-                        doc = Document(uploaded_file)
-                        for para in doc.paragraphs:
-                            if para.text:
-                                text += para.text + "\n"
-                    elif file_name.endswith(".xlsx"):
-                        df_dict = pd.read_excel(uploaded_file, sheet_name=None)
-                        for sheet_name, df in df_dict.items():
-                            text += f"\n[Sheet: {sheet_name}]\n" + df.to_string(index=False) + "\n"
-                    else:  # .txt hoặc mặc định
-                        text = uploaded_file.getvalue().decode("utf-8")
-                        
-                    st.session_state.uploaded_docs[file_name] = {"content": text, "active": True}
-                    has_new = True
-                except Exception as e:
-                    st.error(f"Lỗi đọc file {file_name}: {str(e)}")
+                file_bytes = uploaded_file.getvalue()
+                text = parse_uploaded_file(file_bytes, file_name)
+                st.session_state.uploaded_docs[file_name] = {"content": text, "active": True}
+                has_new = True
         
         if has_new:
             save_docs(st.session_state.uploaded_docs)
-            st.success("Đã thêm và xử lý file thành công!")
+            st.success("Đã thêm và tối ưu hóa file thành công!")
             st.rerun()
 
     if st.session_state.uploaded_docs:
-        st.markdown("### 📄 Danh sách file hiện có:")
-        st.write("Tích chọn file để phân tích & bấm 🗑️ để xóa:")
+        st.markdown("### 📄 Danh sách file & Xem trước:")
         
         files_to_delete = []
         updated_docs = {}
         
         for fname, data in list(st.session_state.uploaded_docs.items()):
-            col1, col2 = st.columns([0.8, 0.2])
+            col1, col2, col3 = st.columns([0.6, 0.2, 0.2])
             with col1:
                 is_active = st.checkbox(fname, value=data["active"], key=f"chk_{fname}")
             with col2:
+                # Đề xuất 1: Nút xem trước nội dung file nhanh
+                if st.button("👁️", key=f"prev_{fname}", help=f"Xem nhanh nội dung {fname}"):
+                    st.session_state[f"show_preview_{fname}"] = not st.session_state.get(f"show_preview_{fname}", False)
+            with col3:
                 if st.button("🗑️", key=f"del_btn_{fname}", help=f"Xóa file {fname}"):
                     files_to_delete.append(fname)
+            
+            # Hiển thị khung xem trước nếu người dùng bấm nút mắt
+            if st.session_state.get(f"show_preview_{fname}", False):
+                with st.expander(f"📖 Nội dung: {fname}", expanded=True):
+                    st.text_area("Văn bản trích xuất:", data["content"][:2000] + ("\n...[Đã lược bớt nội dung dài]..." if len(data["content"]) > 2000 else ""), height=150, key=f"txt_prev_{fname}")
             
             updated_docs[fname] = {"content": data["content"], "active": is_active}
         
@@ -282,6 +304,9 @@ with st.sidebar:
             for fname in files_to_delete:
                 if fname in st.session_state.uploaded_docs:
                     del st.session_state.uploaded_docs[fname]
+                    # Xóa trạng thái preview nếu có
+                    if f"show_preview_{fname}" in st.session_state:
+                        del st.session_state[f"show_preview_{fname}"]
                     st.success(f"Đã xóa thành công file: {fname}")
             save_docs(st.session_state.uploaded_docs)
             st.rerun()
@@ -309,17 +334,20 @@ if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài li
     with st.chat_message("assistant"):
         with st.status("Đang xử lý...", expanded=False) as status:
             
-            # Sử dụng thuật toán trích xuất đoạn văn bản thông minh thay vì cắt cụt thô sơ
+            # Trích xuất ngữ cảnh thông minh
             combined_docs = get_relevant_context(user_input, st.session_state.uploaded_docs)
-
+            
+            # Đề xuất 5: Hiển thị thông tin ký tự/ngữ cảnh đang gửi cho AI
             if combined_docs.strip():
+                st.write(f"📊 Đã trích xuất ngữ cảnh tài liệu (~{len(combined_docs)} ký tự) để phân tích.")
                 prompt_messages = [
                     {"role": "system", "content": "Bạn là trợ lý chuyên phân tích tài liệu. Hãy trả lời câu hỏi dựa hoàn toàn và chính xác vào các đoạn tài liệu được trích xuất dưới đây."},
                     {"role": "user", "content": f"{combined_docs}\n\nCâu hỏi: {user_input}"}
                 ]
                 response = client.chat.completions.create(
                     model=MODEL_NAME,
-                    messages=prompt_messages
+                    messages=prompt_messages,
+                    temperature=temperature
                 )
                 final_content = response.choices[0].message.content
             else:
@@ -328,7 +356,8 @@ if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài li
                     model=MODEL_NAME,
                     messages=api_messages,
                     tools=tools_definition,
-                    tool_choice="auto"
+                    tool_choice="auto",
+                    temperature=temperature
                 )
                 
                 response_message = response.choices[0].message
@@ -355,7 +384,8 @@ if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài li
                     
                     final_response = client.chat.completions.create(
                         model=MODEL_NAME,
-                        messages=api_messages
+                        messages=api_messages,
+                        temperature=temperature
                     )
                     final_content = final_response.choices[0].message.content
                 else:
