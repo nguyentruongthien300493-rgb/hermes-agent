@@ -1,4 +1,0 @@
-streamlit
-groq
-psutil
-duckduckgo_search
