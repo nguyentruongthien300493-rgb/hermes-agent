@@ -16,13 +16,14 @@ st.write("Trợ lý thông minh tích hợp công cụ hệ thống và quản l
 groq_api_key = st.secrets.get("GROQ_API_KEY") or os.environ.get("GROQ_API_KEY")
 
 if not groq_api_key:
-    st.error("Chưa cấu hình GROQ_API_KEY! Vول lòng thêm API Key vào phần Secrets của Streamlit Cloud.")
+    st.error("Chưa cấu hình GROQ_API_KEY! Vui lòng thêm API Key vào phần Secrets của Streamlit Cloud.")
     st.stop()
 
 client = Groq(api_key=groq_api_key)
 MODEL_NAME = "llama-3.3-70b-versatile"
 
 HISTORY_FILE = "chat_history.json"
+DOCS_FILE = "uploaded_docs.json"
 
 def load_history():
     if os.path.exists(HISTORY_FILE):
@@ -43,6 +44,22 @@ def save_history(messages):
             json.dump(clean_msgs, f, ensure_ascii=False, indent=4)
     except Exception as e:
         print(f"Lỗi lưu lịch sử: {e}")
+
+def load_docs():
+    if os.path.exists(DOCS_FILE):
+        try:
+            with open(DOCS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_docs(docs):
+    try:
+        with open(DOCS_FILE, "w", encoding="utf-8") as f:
+            json.dump(docs, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"Lỗi lưu file: {e}")
 
 # ==================== CÁC CÔNG CỤ (TOOLS) ====================
 
@@ -152,9 +169,9 @@ tools_definition = [
 if "messages" not in st.session_state:
     st.session_state.messages = load_history()
 
-# Lưu trữ file tạm thời trong phiên làm việc (F5 sẽ tự mất sạch, không lưu vào lịch sử chat)
+# Tải danh sách tài liệu được lưu xuyên suốt từ file JSON
 if "uploaded_docs" not in st.session_state:
-    st.session_state.uploaded_docs = {}
+    st.session_state.uploaded_docs = load_docs()
 
 with st.sidebar:
     st.header("📚 Quản lý tài liệu")
@@ -162,6 +179,7 @@ with st.sidebar:
     uploaded_files = st.file_uploader("Tải lên tài liệu (chọn nhiều file PDF hoặc TXT)", type=["pdf", "txt"], accept_multiple_files=True)
     
     if uploaded_files:
+        has_new = False
         for uploaded_file in uploaded_files:
             file_name = uploaded_file.name
             if file_name not in st.session_state.uploaded_docs:
@@ -174,17 +192,23 @@ with st.sidebar:
                             if extracted:
                                 text += extracted + "\n"
                         st.session_state.uploaded_docs[file_name] = {"content": text, "active": True}
+                        has_new = True
                     else:
                         content_str = uploaded_file.getvalue().decode("utf-8")
                         st.session_state.uploaded_docs[file_name] = {"content": content_str, "active": True}
+                        has_new = True
                 except Exception as e:
                     st.error(f"Lỗi đọc file {file_name}: {str(e)}")
+        
+        if has_new:
+            save_docs(st.session_state.uploaded_docs)
+            st.success("Đã thêm và lưu trữ file xuyên suốt thành công!")
+            st.rerun()
 
     if st.session_state.uploaded_docs:
         st.markdown("### 📄 Danh sách file hiện có:")
         st.write("Tích chọn file để phân tích & bấm 🗑️ để xóa:")
         
-        # Duyệt qua danh sách để hiển thị checkbox đi kèm nút xóa riêng cho từng file
         files_to_delete = []
         updated_docs = {}
         
@@ -198,13 +222,18 @@ with st.sidebar:
             
             updated_docs[fname] = {"content": data["content"], "active": is_active}
         
-        st.session_state.uploaded_docs = updated_docs
+        # Cập nhật lại trạng thái active nếu có thay đổi checkbox
+        if updated_docs != st.session_state.uploaded_docs:
+            st.session_state.uploaded_docs = updated_docs
+            save_docs(st.session_state.uploaded_docs)
 
-        # Tiến hành xóa nếu có nút xóa nào được bấm
+        # Xóa file khi người dùng bấm nút xóa
         if files_to_delete:
             for fname in files_to_delete:
-                del st.session_state.uploaded_docs[fname]
-                st.success(f"Đã xóa thành công file: {fname}")
+                if fname in st.session_state.uploaded_docs:
+                    del st.session_state.uploaded_docs[fname]
+                    st.success(f"Đã xóa thành công file: {fname}")
+            save_docs(st.session_state.uploaded_docs)
             st.rerun()
 
     st.markdown("---")
