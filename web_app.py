@@ -16,7 +16,7 @@ st.write("Trợ lý thông minh tích hợp công cụ hệ thống và quản l
 groq_api_key = st.secrets.get("GROQ_API_KEY") or os.environ.get("GROQ_API_KEY")
 
 if not groq_api_key:
-    st.error("Chưa cấu hình GROQ_API_KEY! Vui lòng thêm API Key vào phần Secrets của Streamlit Cloud.")
+    st.error("Chưa cấu hình GROQ_API_KEY! Vول lòng thêm API Key vào phần Secrets của Streamlit Cloud.")
     st.stop()
 
 client = Groq(api_key=groq_api_key)
@@ -152,7 +152,7 @@ tools_definition = [
 if "messages" not in st.session_state:
     st.session_state.messages = load_history()
 
-# Lưu trữ file tạm thời trong phiên làm việc (F5 sẽ tự mất sạch)
+# Lưu trữ file tạm thời trong phiên làm việc (F5 sẽ tự mất sạch, không lưu vào lịch sử chat)
 if "uploaded_docs" not in st.session_state:
     st.session_state.uploaded_docs = {}
 
@@ -182,24 +182,30 @@ with st.sidebar:
 
     if st.session_state.uploaded_docs:
         st.markdown("### 📄 Danh sách file hiện có:")
-        st.write("Tích chọn file để đưa vào phân tích:")
+        st.write("Tích chọn file để phân tích & bấm 🗑️ để xóa:")
         
+        # Duyệt qua danh sách để hiển thị checkbox đi kèm nút xóa riêng cho từng file
+        files_to_delete = []
         updated_docs = {}
+        
         for fname, data in list(st.session_state.uploaded_docs.items()):
-            is_active = st.checkbox(fname, value=data["active"], key=f"chk_{fname}")
+            col1, col2 = st.columns([0.8, 0.2])
+            with col1:
+                is_active = st.checkbox(fname, value=data["active"], key=f"chk_{fname}")
+            with col2:
+                if st.button("🗑️", key=f"del_btn_{fname}", help=f"Xóa file {fname}"):
+                    files_to_delete.append(fname)
+            
             updated_docs[fname] = {"content": data["content"], "active": is_active}
         
         st.session_state.uploaded_docs = updated_docs
 
-        st.markdown("---")
-        selected_file_to_remove = st.selectbox("Chọn file để xóa", ["-- Chọn file --"] + list(st.session_state.uploaded_docs.keys()), key="sel_remove_file")
-        
-        if selected_file_to_remove != "-- Chọn file --":
-            if st.button("🗑️ Xóa file đã chọn", key="btn_remove_file_action"):
-                if selected_file_to_remove in st.session_state.uploaded_docs:
-                    del st.session_state.uploaded_docs[selected_file_to_remove]
-                    st.success(f"Đã xóa thành công file: {selected_file_to_remove}")
-                    st.rerun()
+        # Tiến hành xóa nếu có nút xóa nào được bấm
+        if files_to_delete:
+            for fname in files_to_delete:
+                del st.session_state.uploaded_docs[fname]
+                st.success(f"Đã xóa thành công file: {fname}")
+            st.rerun()
 
     st.markdown("---")
     if st.button("🗑️ Xóa toàn bộ lịch sử chat"):
