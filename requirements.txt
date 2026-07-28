@@ -1,0 +1,6 @@
+streamlit
+groq
+psutil
+duckduckgo_search
+pyautogui
+pillow
