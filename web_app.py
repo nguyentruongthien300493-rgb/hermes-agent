@@ -165,7 +165,6 @@ tools_definition = [
     }
 ]
 
-# Hàm xử lý tối ưu hóa đọc file với Caching (Đề xuất 4)
 @st.cache_data
 def parse_uploaded_file(file_bytes, file_name):
     text = ""
@@ -194,7 +193,6 @@ def parse_uploaded_file(file_bytes, file_name):
         text = f"Lỗi đọc file: {str(e)}"
     return text
 
-# Hàm RAG thông minh lọc đoạn liên quan
 def get_relevant_context(query, docs_dict, max_chars=8000):
     combined_context = ""
     query_words = set(query.lower().split())
@@ -239,12 +237,22 @@ if "uploaded_docs" not in st.session_state:
 
 with st.sidebar:
     st.header("⚙️ Cài đặt AI")
-    # Đề xuất 2: Tùy chỉnh Model và Temperature
-    MODEL_NAME = st.selectbox(
+    
+    # Định nghĩa danh sách model kèm mô tả tiếng Việt trực quan
+    model_options = {
+        "llama-3.3-70b-versatile": "llama-3.3-70b-versatile (Thông minh nhất, phân tích sâu)",
+        "llama-3.1-8b-instant": "llama-3.1-8b-instant (Siêu nhanh, gọn nhẹ)",
+        "mixtral-8x7b-32768": "mixtral-8x7b-32768 (Xử lý văn bản cực dài)"
+    }
+    
+    selected_label = st.selectbox(
         "Chọn Model AI",
-        ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
+        options=list(model_options.values()),
         index=0
     )
+    # Tự động trích xuất lại tên model kỹ thuật từ lựa chọn của người dùng
+    MODEL_NAME = [k for k, v in model_options.items() if v == selected_label][0]
+
     temperature = st.slider("Độ sáng tạo (Temperature)", min_value=0.0, max_value=1.0, value=0.7, step=0.1)
 
     st.markdown("---")
@@ -282,14 +290,12 @@ with st.sidebar:
             with col1:
                 is_active = st.checkbox(fname, value=data["active"], key=f"chk_{fname}")
             with col2:
-                # Đề xuất 1: Nút xem trước nội dung file nhanh
                 if st.button("👁️", key=f"prev_{fname}", help=f"Xem nhanh nội dung {fname}"):
                     st.session_state[f"show_preview_{fname}"] = not st.session_state.get(f"show_preview_{fname}", False)
             with col3:
                 if st.button("🗑️", key=f"del_btn_{fname}", help=f"Xóa file {fname}"):
                     files_to_delete.append(fname)
             
-            # Hiển thị khung xem trước nếu người dùng bấm nút mắt
             if st.session_state.get(f"show_preview_{fname}", False):
                 with st.expander(f"📖 Nội dung: {fname}", expanded=True):
                     st.text_area("Văn bản trích xuất:", data["content"][:2000] + ("\n...[Đã lược bớt nội dung dài]..." if len(data["content"]) > 2000 else ""), height=150, key=f"txt_prev_{fname}")
@@ -304,7 +310,6 @@ with st.sidebar:
             for fname in files_to_delete:
                 if fname in st.session_state.uploaded_docs:
                     del st.session_state.uploaded_docs[fname]
-                    # Xóa trạng thái preview nếu có
                     if f"show_preview_{fname}" in st.session_state:
                         del st.session_state[f"show_preview_{fname}"]
                     st.success(f"Đã xóa thành công file: {fname}")
@@ -334,10 +339,8 @@ if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài li
     with st.chat_message("assistant"):
         with st.status("Đang xử lý...", expanded=False) as status:
             
-            # Trích xuất ngữ cảnh thông minh
             combined_docs = get_relevant_context(user_input, st.session_state.uploaded_docs)
             
-            # Đề xuất 5: Hiển thị thông tin ký tự/ngữ cảnh đang gửi cho AI
             if combined_docs.strip():
                 st.write(f"📊 Đã trích xuất ngữ cảnh tài liệu (~{len(combined_docs)} ký tự) để phân tích.")
                 prompt_messages = [
