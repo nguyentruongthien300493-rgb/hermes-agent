@@ -33,12 +33,11 @@ def load_history():
             return []
     return [{
         "role": "system", 
-        "content": "Bạn là Hermes Agent - một chuyên gia kỹ sư IT và trợ lý ảo thông minh, nói chuyện ngắn gọn, súc tích, chuẩn xác bằng tiếng Việt và luôn tận dụng tối đa các công cụ được cung cấp."
+        "content": "Bạn là Hermes Agent - một trợ lý ảo thông minh, nói chuyện ngắn gọn, súc tích, chuẩn xác bằng tiếng Việt."
     }]
 
 def save_history(messages):
     try:
-        # Chỉ lưu các message dạng user/assistant thuần túy để tránh lỗi lịch sử API
         clean_msgs = [m for m in messages if m.get("role") in ["user", "assistant", "system"]]
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump(clean_msgs, f, ensure_ascii=False, indent=4)
@@ -201,60 +200,58 @@ if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài li
     with st.chat_message("assistant"):
         with st.status("Đang xử lý...", expanded=False) as status:
             
-            # Tạo danh sách tin nhắn gửi riêng cho API để tránh làm phình to lịch sử trò chuyện
-            api_messages = list(st.session_state.messages)
-            
-            # Nếu có tài liệu, chỉ chèn nội dung gọn gàng vào câu hỏi mới nhất của user
-            if st.session_state.doc_content and api_messages:
-                # Giới hạn nội dung tài liệu ở mức an toàn (4000 ký tự đầu) để không vượt token limit của Groq
-                short_doc = st.session_state.doc_content[:4000]
-                last_msg_idx = len(api_messages) - 1
-                api_messages[last_msg_idx] = {
-                    "role": "user",
-                    "content": f"Dựa vào nội dung tài liệu sau:\n{short_doc}\n\nYêu cầu/Câu hỏi: {user_input}"
-                }
-
-            response = client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=api_messages,
-                tools=tools_definition,
-                tool_choice="auto"
-            )
-            
-            response_message = response.choices[0].message
-            
-            # Kiểm tra xem mô hình có gọi công cụ (tool) nào không
-            if response_message.tool_calls:
-                # Thêm phản hồi có chứa tool_calls vào lịch sử tạm để thực thi
-                api_messages.append(response_message)
-                
-                for tool_call in response_message.tool_calls:
-                    func_name = tool_call.function.name
-                    func_args = json.loads(tool_call.function.arguments)
-                    
-                    st.write(f"⚙️ Gọi công cụ: `{func_name}`")
-                    
-                    fn = tools_map.get(func_name)
-                    if fn:
-                        tool_result = fn(**func_args)
-                        st.write(f"📥 Kết quả: `{tool_result}`")
-                        
-                        api_messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": func_name,
-                            "content": str(tool_result)
-                        })
-                
-                final_response = client.chat.completions.create(
+            # Nếu có tài liệu, chúng ta gửi trực tiếp câu hỏi kèm nội dung tài liệu dạng system/user prompt thuần túy
+            if st.session_state.doc_content:
+                short_doc = st.session_state.doc_content[:10000] # Giới hạn nội dung an toàn
+                prompt_messages = [
+                    {"role": "system", "content": "Bạn là trợ lý chuyên phân tích tài liệu kỹ thuật, hãy trả lời câu hỏi dựa hoàn toàn vào nội dung tài liệu được cung cấp dưới đây."},
+                    {"role": "user", "content": f"Nội dung tài liệu:\n{short_doc}\n\nCâu hỏi: {user_input}"}
+                ]
+                response = client.chat.completions.create(
                     model=MODEL_NAME,
-                    messages=api_messages
+                    messages=prompt_messages
                 )
-                final_content = final_response.choices[0].message.content
+                final_content = response.choices[0].message.content
             else:
-                final_content = response_message.content
+                # Chế độ chat thông thường có dùng Tools
+                api_messages = list(st.session_state.messages)
+                response = client.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=api_messages,
+                    tools=tools_definition,
+                    tool_choice="auto"
+                )
+                
+                response_message = response.choices[0].message
+                
+                if response_message.tool_calls:
+                    api_messages.append(response_message)
+                    for tool_call in response_message.tool_calls:
+                        func_name = tool_call.function.name
+                        func_args = json.loads(tool_call.function.arguments)
+                        
+                        st.write(f"⚙️ Gọi công cụ: `{func_name}`")
+                        
+                        fn = tools_map.get(func_name)
+                        if fn:
+                            tool_result = fn(**func_args)
+                            st.write(f"📥 Kết quả: `{tool_result}`")
+                            
+                            api_messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "name": func_name,
+                                "content": str(tool_result)
+                            })
+                    
+                    final_response = client.chat.completions.create(
+                        model=MODEL_NAME,
+                        messages=api_messages
+                    )
+                    final_content = final_response.choices[0].message.content
+                else:
+                    final_content = response_message.content
             
-            # Lưu phản hồi chuẩn của assistant vào lịch sử chính
             st.session_state.messages.append({"role": "assistant", "content": final_content})
             save_history(st.session_state.messages)
             status.update(label="Hoàn thành!", state="complete", expanded=False)
