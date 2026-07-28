@@ -2,16 +2,10 @@ import streamlit as st
 from groq import Groq
 import os
 import json
-import shutil
 import psutil
 from datetime import datetime
+from pypdf import PdfReader
 from duckduckgo_search import DDGS
-
-# Thư viện cho RAG (Đọc tài liệu)
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
-from langchain_community.document_loaders import TextLoader, PyPDFLoader
-from langchain_community.embeddings import FakeEmbeddings
 
 st.set_page_config(page_title="Hermes Agent - Advanced Cloud", page_icon="⚡", layout="centered")
 
@@ -152,40 +146,40 @@ tools_definition = [
     }
 ]
 
-# ==================== GIAO DIỆN & TÍNH NĂNG RAG ====================
+# ==================== GIAO DIỆN & XỬ LÝ TÀI LIỆU ====================
 
 if "messages" not in st.session_state:
     st.session_state.messages = load_history()
+
+# Biến lưu trữ nội dung tài liệu trong bộ nhớ phiên làm việc
+if "doc_content" not in st.session_state:
+    st.session_state.doc_content = ""
 
 with st.sidebar:
     st.header("📚 Kho tài liệu tri thức")
     uploaded_file = st.file_uploader("Tải lên tài liệu (PDF hoặc TXT)", type=["pdf", "txt"])
     
-    vectorstore = None
     if uploaded_file is not None:
-        os.makedirs("temp_docs", exist_ok=True)
-        file_path = os.path.join("temp_docs", uploaded_file.name)
-        with open(file_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        
-        with st.spinner("Đang xử lý và nạp tài liệu vào bộ nhớ..."):
+        try:
             if uploaded_file.name.endswith(".pdf"):
-                loader = PyPDFLoader(file_path)
+                reader = PdfReader(uploaded_file)
+                text = ""
+                for page in reader.pages:
+                    extracted = page.extract_text()
+                    if extracted:
+                        text += extracted + "\n"
+                st.session_state.doc_content = text
             else:
-                loader = TextLoader(file_path, encoding="utf-8")
+                st.session_state.doc_content = uploaded_file.getvalue().decode("utf-8")
             
-            documents = loader.load()
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-            texts = text_splitter.split_documents(documents)
-            
-            # Sử dụng FakeEmbeddings để chạy nhanh gọn trên cloud miễn phí
-            embeddings = FakeEmbeddings(size=128)
-            vectorstore = Chroma.from_documents(texts, embeddings)
-            st.success(f"Đã xử lý xong tài liệu: {uploaded_file.name}")
+            st.success(f"Đã đọc xong tài liệu: {uploaded_file.name}")
+        except Exception as e:
+            st.error(f"Lỗi đọc tài liệu: {str(e)}")
 
     st.markdown("---")
     if st.button("🗑️ Xóa bộ nhớ trò chuyện"):
         st.session_state.messages = [st.session_state.messages[0]] if st.session_state.messages else []
+        st.session_state.doc_content = ""
         if os.path.exists(HISTORY_FILE):
             os.remove(HISTORY_FILE)
         st.rerun()
@@ -197,14 +191,10 @@ for msg in st.session_state.messages:
                 st.markdown(msg["content"])
 
 if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài liệu..."):
-    # Nếu người dùng có tải tài liệu lên và hỏi, tìm kiếm đoạn văn bản liên quan để tiêm vào prompt
-    context_text = ""
-    if uploaded_file is not None and vectorstore is not None:
-        docs = vectorstore.similarity_search(user_input, k=3)
-        context_text = "\n---\n".join([d.page_content for d in docs])
-        user_input_with_context = f"Dựa vào tài liệu sau đây:\n{context_text}\n\nHãy trả lời câu hỏi: {user_input}"
-    else:
-        user_input_with_context = user_input
+    # Gộp nội dung tài liệu vào câu hỏi nếu người dùng đã tải lên
+    final_user_input = user_input
+    if st.session_state.doc_content:
+        final_user_input = f"Dựa vào nội dung tài liệu sau:\n{st.session_state.doc_content[:15000]}\n\nCâu hỏi của tôi là: {user_input}"
 
     st.session_state.messages.append({"role": "user", "content": user_input})
     save_history(st.session_state.messages)
@@ -215,10 +205,9 @@ if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài li
     with st.chat_message("assistant"):
         with st.status("Đang xử lý...", expanded=False) as status:
             
-            # Gửi tin nhắn có kèm ngữ cảnh tài liệu (nếu có) vào mô hình LLM
             temp_messages = list(st.session_state.messages)
-            if context_text:
-                temp_messages[-1]["content"] = user_input_with_context
+            if st.session_state.doc_content:
+                temp_messages[-1]["content"] = final_user_input
 
             response = client.chat.completions.create(
                 model=MODEL_NAME,
