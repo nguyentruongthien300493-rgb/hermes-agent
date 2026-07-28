@@ -147,43 +147,55 @@ tools_definition = [
     }
 ]
 
-# ==================== GIAO DIỆN & QUẢN LÝ TÀI LIỆU SIDEBAR ====================
+# ==================== GIAO DIỆN & QUẢN LÝ ĐA TÀI LIỆU SIDEBAR ====================
 
 if "messages" not in st.session_state:
     st.session_state.messages = load_history()
 
-# Quản lý danh sách tài liệu dạng từ điển: { tên_file: nội_dung }
+# Lưu trữ danh sách tài liệu: { tên_file: { "content": nội_dung, "active": trạng_thái_chọn } }
 if "uploaded_docs" not in st.session_state:
     st.session_state.uploaded_docs = {}
 
 with st.sidebar:
     st.header("📚 Quản lý tài liệu")
-    uploaded_file = st.file_uploader("Tải lên tài liệu mới (PDF hoặc TXT)", type=["pdf", "txt"])
     
-    if uploaded_file is not None:
-        file_name = uploaded_file.name
-        if file_name not in st.session_state.uploaded_docs:
-            try:
-                if file_name.endswith(".pdf"):
-                    reader = PdfReader(uploaded_file)
-                    text = ""
-                    for page in reader.pages:
-                        extracted = page.extract_text()
-                        if extracted:
-                            text += extracted + "\n"
-                    st.session_state.uploaded_docs[file_name] = text
-                else:
-                    st.session_state.uploaded_docs[file_name] = uploaded_file.getvalue().decode("utf-8")
-                
-                st.success(f"Đã thêm: {file_name}")
-            except Exception as e:
-                st.error(f"Lỗi đọc file: {str(e)}")
+    # Cho phép chọn nhiều file cùng lúc (accept_multiple_files=True)
+    uploaded_files = st.file_uploader("Tải lên tài liệu (chọn nhiều file PDF hoặc TXT)", type=["pdf", "txt"], accept_multiple_files=True)
+    
+    if uploaded_files:
+        for uploaded_file in uploaded_files:
+            file_name = uploaded_file.name
+            if file_name not in st.session_state.uploaded_docs:
+                try:
+                    if file_name.endswith(".pdf"):
+                        reader = PdfReader(uploaded_file)
+                        text = ""
+                        for page in reader.pages:
+                            extracted = page.extract_text()
+                            if extracted:
+                                text += extracted + "\n"
+                        st.session_state.uploaded_docs[file_name] = {"content": text, "active": True}
+                    else:
+                        content_str = uploaded_file.getvalue().decode("utf-8")
+                        st.session_state.uploaded_docs[file_name] = {"content": content_str, "active": True}
+                except Exception as e:
+                    st.error(f"Lỗi đọc file {file_name}: {str(e)}")
 
-    # Hiển thị danh sách các file đang có trong bộ nhớ
+    # Hiển thị danh sách file kèm checkbox để bật/tắt hoặc xóa
     if st.session_state.uploaded_docs:
         st.markdown("### 📄 Danh sách file hiện có:")
-        selected_file_to_remove = st.selectbox("Chọn file để xóa (nếu muốn)", ["-- Chọn file --"] + list(st.session_state.uploaded_docs.keys()))
+        st.write("Tích chọn file để đưa vào phân tích:")
         
+        # Danh sách tạm để cập nhật trạng thái
+        updated_docs = {}
+        for fname, data in st.session_state.uploaded_docs.items():
+            is_active = st.checkbox(fname, value=data["active"], key=f"chk_{fname}")
+            updated_docs[fname] = {"content": data["content"], "active": is_active}
+        
+        st.session_state.uploaded_docs = updated_docs
+
+        st.markdown("---")
+        selected_file_to_remove = st.selectbox("Chọn file để xóa", ["-- Chọn file --"] + list(st.session_state.uploaded_docs.keys()))
         if selected_file_to_remove != "-- Chọn file --":
             if st.button("🗑️ Xóa file đã chọn"):
                 del st.session_state.uploaded_docs[selected_file_to_remove]
@@ -191,7 +203,7 @@ with st.sidebar:
                 st.rerun()
 
     st.markdown("---")
-    if st.button("🗑️ Xóa toàn bộ lịch sử chat"):
+    if st.button("🗑️ Xóa toàn bộ lịch sử & file"):
         st.session_state.messages = [st.session_state.messages[0]] if st.session_state.messages else []
         st.session_state.uploaded_docs = {}
         if os.path.exists(HISTORY_FILE):
@@ -214,15 +226,16 @@ if user_input := st.chat_input("Nhập yêu cầu hoặc câu hỏi về tài li
     with st.chat_message("assistant"):
         with st.status("Đang xử lý...", expanded=False) as status:
             
-            # Gộp toàn bộ nội dung các file đang có trong danh sách vào ngữ cảnh cho AI
+            # Chỉ tổng hợp nội dung của các file đang được tích chọn (active == True)
             combined_docs = ""
             if st.session_state.uploaded_docs:
-                for fname, fcontent in st.session_state.uploaded_docs.items():
-                    combined_docs += f"\n--- TÀI LIỆU: {fname} ---\n{fcontent[:5000]}\n"
+                for fname, data in st.session_state.uploaded_docs.items():
+                    if data["active"]:
+                        combined_docs += f"\n--- TÀI LIỆU: {fname} ---\n{data['content'][:4000]}\n"
 
             if combined_docs:
                 prompt_messages = [
-                    {"role": "system", "content": "Bạn là trợ lý chuyên phân tích tài liệu, hãy trả lời câu hỏi dựa hoàn toàn vào các tài liệu được cung cấp dưới đây."},
+                    {"role": "system", "content": "Bạn là trợ lý chuyên phân tích tài liệu, hãy trả lời câu hỏi dựa hoàn toàn vào các tài liệu được tích chọn cung cấp dưới đây."},
                     {"role": "user", "content": f"{combined_docs}\n\nCâu hỏi: {user_input}"}
                 ]
                 response = client.chat.completions.create(
